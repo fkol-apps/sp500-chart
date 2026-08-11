@@ -1,0 +1,39 @@
+name: Update S&P 500 data
+
+on:
+  schedule:
+    # 平日 22:30 UTC（米国市場クローズ後 / 日本時間 翌 07:30）
+    - cron: "30 22 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-data
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch latest monthly closes
+        run: python scripts/update_data.py
+
+      - name: Commit if changed
+        run: |
+          if [ -z "$(git status --porcelain data/sp500-monthly.json)" ]; then
+            echo "変更なし。コミットをスキップします。"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/sp500-monthly.json
+          git commit -m "chore: update S&P 500 monthly data"
+          git push
