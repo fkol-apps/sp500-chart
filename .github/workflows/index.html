@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>S&P 500 全期間チャート</title>
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, sans-serif;
+            background: #0d1117; color: #e6edf3;
+            min-height: 100vh; padding: 20px;
+        }
+        h1 { text-align:center; font-size:1.8rem; margin-bottom:6px; color:#58a6ff; }
+        .subtitle { text-align:center; color:#8b949e; font-size:.9rem; margin-bottom:16px; }
+        .stats {
+            display:flex; justify-content:center; gap:40px;
+            margin-bottom:16px; flex-wrap:wrap;
+        }
+        .stat-item { text-align:center; }
+        .stat-label { font-size:.72rem; color:#8b949e; text-transform:uppercase; letter-spacing:1px; }
+        .stat-value { font-size:1.25rem; font-weight:bold; color:#3fb950; }
+        .stat-value.blue { color:#58a6ff; font-size:1rem; }
+        .range-buttons {
+            display:flex; justify-content:center; gap:8px;
+            margin-bottom:12px; flex-wrap:wrap;
+        }
+        .range-btn {
+            background:#21262d; border:1px solid #30363d; color:#8b949e;
+            padding:5px 14px; border-radius:6px; cursor:pointer;
+            font-size:.85rem; transition:all .2s;
+        }
+        .range-btn:hover { background:#30363d; color:#e6edf3; }
+        .range-btn.active {
+            background:#58a6ff; border-color:#58a6ff;
+            color:#0d1117; font-weight:bold;
+        }
+        .range-btn:focus-visible, .refresh-btn:focus-visible,
+        .toggle-switch input:focus-visible + .slider { outline:2px solid #58a6ff; outline-offset:2px; }
+        #chart { width:100%; height:70vh; }
+        .controls {
+            display:flex; justify-content:center; align-items:center;
+            gap:18px; margin-bottom:10px; font-size:.85rem; color:#8b949e;
+            flex-wrap:wrap;
+        }
+        .log-toggle { display:flex; align-items:center; gap:10px; }
+        .toggle-switch { position:relative; width:36px; height:20px; }
+        .toggle-switch input { opacity:0; width:0; height:0; }
+        .slider {
+            position:absolute; cursor:pointer; inset:0;
+            background:#21262d; border-radius:20px;
+            transition:.3s; border:1px solid #30363d;
+        }
+        .slider::before {
+            content:""; position:absolute;
+            width:14px; height:14px; left:2px; bottom:2px;
+            background:#8b949e; border-radius:50%; transition:.3s;
+        }
+        input:checked + .slider { background:#58a6ff; border-color:#58a6ff; }
+        input:checked + .slider::before { transform:translateX(16px); background:#0d1117; }
+        .refresh-btn {
+            background:#21262d; border:1px solid #30363d; color:#8b949e;
+            padding:5px 14px; border-radius:6px; cursor:pointer;
+            font-size:.85rem; transition:all .2s;
+        }
+        .refresh-btn:hover:not(:disabled) { background:#30363d; color:#e6edf3; }
+        .refresh-btn:disabled { opacity:.5; cursor:default; }
+        #status-bar {
+            text-align:center; font-size:.78rem;
+            margin-bottom:8px; min-height:18px;
+        }
+        .s-loading { color:#8b949e; }
+        .s-ok  { color:#3fb950; }
+        .s-warn { color:#d29922; }
+        .s-err { color:#f85149; }
+        .note { text-align:center; color:#484f58; font-size:.75rem; margin-top:8px; line-height:1.7; }
+        .note a { color:#484f58; }
+        @media (prefers-reduced-motion: reduce) { * { transition:none !important; } }
+    </style>
+</head>
+<body>
+    <h1>S&amp;P 500 全期間チャート</h1>
+    <p class="subtitle">1928年〜現在の歴史的価格推移</p>
+
+    <div class="stats">
+        <div class="stat-item">
+            <div class="stat-label">直近値</div>
+            <div class="stat-value" id="stat-current">-</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-label">全期間騰落率</div>
+            <div class="stat-value" id="stat-return">-</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-label">過去最高値</div>
+            <div class="stat-value" id="stat-ath">-</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-label">データ期間</div>
+            <div class="stat-value blue" id="stat-range">-</div>
+        </div>
+    </div>
+
+    <div id="status-bar" class="s-loading">データを読み込み中...</div>
+
+    <div class="range-buttons">
+        <button class="range-btn" onclick="setRange(1,this)">1Y</button>
+        <button class="range-btn" onclick="setRange(5,this)">5Y</button>
+        <button class="range-btn" onclick="setRange(10,this)">10Y</button>
+        <button class="range-btn" onclick="setRange(20,this)">20Y</button>
+        <button class="range-btn" onclick="setRange(50,this)">50Y</button>
+        <button class="range-btn active" onclick="setRange(null,this)">全期間</button>
+    </div>
+
+    <div class="controls">
+        <div class="log-toggle">
+            <span>対数スケール</span>
+            <label class="toggle-switch">
+                <input type="checkbox" id="log-check" onchange="renderChart()">
+                <span class="slider"></span>
+            </label>
+        </div>
+        <button class="refresh-btn" id="refresh-btn" onclick="loadLive()">最新値を取得</button>
+    </div>
+
+    <div id="chart"></div>
+    <p class="note" id="note"></p>
+
+    <script>
+        /* ══════════════════════════════════════════════════════════
+           データの読み込み
+
+           通常は data/sp500-monthly.json を読む。このファイルは
+           GitHub Actions が平日1回更新してコミットする。
+           JSONが読めない場合（file:// で直接開いた等）や
+           「最新値を取得」を押した場合は、公開CORSプロキシ経由で
+           Stooq / Yahoo から直接取りにいく。
+        ══════════════════════════════════════════════════════════ */
+
+        const DATA_URL = "data/sp500-monthly.json";
+
+        let allDates  = [];
+        let allPrices = [];
+        let sourceLabel = "";
+        let updatedAt = null;
+
+        const $ = id => document.getElementById(id);
+        const fmt = n => n.toLocaleString("en-US", {minimumFractionDigits:2, maximumFractionDigits:2});
+        const ym  = d => d.slice(0,7).replace("-","/");
+
+        function setStatus(cls, text) {
+            $("status-bar").className = cls;
+            $("status-bar").textContent = text;
+        }
+
+        /* ── 統計とチャート ────────────────────────────────────── */
+        function updateStats() {
+            if (!allPrices.length) return;
+            const cur = allPrices.at(-1);
+            const ret = ((cur / allPrices[0]) - 1) * 100;
+            const ath = Math.max(...allPrices);
+            $("stat-current").textContent = fmt(cur);
+            $("stat-return").textContent  = (ret >= 0 ? "+" : "") + ret.toFixed(1) + "%";
+            $("stat-ath").textContent     = fmt(ath);
+            $("stat-range").textContent   = ym(allDates[0]) + " 〜 " + ym(allDates.at(-1));
+        }
+
+        function updateNote() {
+            const stamp = updatedAt
+                ? new Date(updatedAt).toLocaleString("ja-JP", {dateStyle:"medium", timeStyle:"short"})
+                : "—";
+            $("note").textContent =
+                `データ出典: ${sourceLabel} ／ 月次終値　　最終更新: ${stamp}` +
+                `　　※当月分は月末までの暫定値です`;
+        }
+
+        // 最終データ年の1月を境に色分けする（毎年自動で切り替わる）
+        function splitIndex() {
+            const lastYear = allDates.at(-1).slice(0,4);
+            const i = allDates.findIndex(d => d.slice(0,4) === lastYear);
+            return i <= 0 ? allDates.length - 1 : i;
+        }
+
+        function renderChart() {
+            if (!allDates.length) return;
+            const isLog = $("log-check").checked;
+            const cut   = splitIndex();
+            const lastYear = +allDates.at(-1).slice(0,4);
+
+            const traceHist = {
+                x: allDates.slice(0, cut),
+                y: allPrices.slice(0, cut),
+                type:"scatter", mode:"lines", name:`S&P 500 (〜${lastYear - 1})`,
+                line:{ color:"#58a6ff", width:1.5 },
+                fill: isLog ? "none" : "tozeroy", fillcolor:"rgba(88,166,255,0.07)",
+                hovertemplate:"<b>%{x|%Y/%m}</b><br>%{y:,.2f}<extra></extra>"
+            };
+
+            const traceNew = {
+                x: allDates.slice(cut - 1),
+                y: allPrices.slice(cut - 1),
+                type:"scatter", mode:"lines", name:`S&P 500 (${lastYear}年)`,
+                line:{ color:"#3fb950", width:2 },
+                fill: isLog ? "none" : "tozeroy", fillcolor:"rgba(63,185,80,0.07)",
+                hovertemplate:"<b>%{x|%Y/%m}</b><br>%{y:,.2f}<extra></extra>"
+            };
+
+            const crashLine = x => ({
+                type:"line", x0:x, x1:x, y0:0, y1:1, yref:"paper",
+                line:{ color:"rgba(248,81,73,.4)", width:1, dash:"dot" }
+            });
+            const crashText = (x, y, t) => ({
+                x, y, yref:"paper", text:t, showarrow:false,
+                font:{ color:"rgba(248,81,73,.8)", size:10 }, xanchor:"left"
+            });
+
+            const layout = {
+                paper_bgcolor:"#0d1117", plot_bgcolor:"#0d1117",
+                font:{ color:"#e6edf3", size:12 },
+                xaxis:{
+                    gridcolor:"#21262d", linecolor:"#30363d",
+                    rangeslider:{ visible:true, bgcolor:"#161b22", bordercolor:"#30363d", thickness:.06 }
+                },
+                yaxis:{
+                    gridcolor:"#21262d", linecolor:"#30363d",
+                    title:"S&P 500 指数", tickformat:",.0f",
+                    type: isLog ? "log" : "linear"
+                },
+                margin:{ t:10, r:20, b:60, l:75 },
+                hovermode:"x unified",
+                hoverlabel:{ bgcolor:"#161b22", bordercolor:"#30363d", font:{ color:"#e6edf3" } },
+                legend:{ x:.01, y:.99, bgcolor:"rgba(13,17,23,.8)", bordercolor:"#30363d", borderwidth:1 },
+                shapes:["1929-10-01","2000-03-01","2008-09-01","2020-03-01"].map(crashLine),
+                annotations:[
+                    crashText("1929-10-01", .55, "大恐慌"),
+                    crashText("2000-03-01", .88, "ITバブル"),
+                    crashText("2008-09-01", .78, "リーマン"),
+                    crashText("2020-03-01", .68, "COVID")
+                ]
+            };
+
+            Plotly.react("chart", [traceHist, traceNew], layout, {
+                responsive:true, displayModeBar:true,
+                modeBarButtonsToRemove:["lasso2d","select2d","autoScale2d"],
+                displaylogo:false
+            });
+        }
+
+        function setRange(years, btn) {
+            document.querySelectorAll(".range-btn").forEach(b => b.classList.remove("active"));
+            btn.classList.add("active");
+            if (!allDates.length) return;
+            if (years === null) {
+                Plotly.relayout("chart", {"xaxis.autorange":true});
+            } else {
+                const end = new Date();
+                const start = new Date();
+                start.setFullYear(end.getFullYear() - years);
+                Plotly.relayout("chart", {
+                    "xaxis.range":[start.toISOString().slice(0,10), end.toISOString().slice(0,10)]
+                });
+            }
+        }
+
+        /* ── データ取得 ────────────────────────────────────────── */
+        function apply(data) {
+            allDates    = data.dates;
+            allPrices   = data.prices;
+            sourceLabel = data.source;
+            updatedAt   = data.updated;
+            updateStats();
+            renderChart();
+            updateNote();
+        }
+
+        function isValid(data) {
+            return data
+                && Array.isArray(data.dates) && Array.isArray(data.prices)
+                && data.dates.length === data.prices.length
+                && data.dates.length > 100;
+        }
+
+        // リポジトリのJSON（Actionsが更新するもの）
+        async function loadRepoData() {
+            const res = await fetch(DATA_URL + "?t=" + Date.now(), { cache:"no-store" });
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            const data = await res.json();
+            if (!isValid(data)) throw new Error("JSONの形式が不正です");
+            return data;
+        }
+
+        // ライブ取得（プロキシ総当たり）
+        const PROXIES = [
+            u => u,
+            u => "https://api.allorigins.win/raw?url=" + encodeURIComponent(u),
+            u => "https://api.codetabs.com/v1/proxy?quest=" + encodeURIComponent(u),
+            u => "https://corsproxy.io/?url=" + encodeURIComponent(u)
+        ];
+
+        async function fetchText(url, timeoutMs = 8000) {
+            let lastErr;
+            for (const wrap of PROXIES) {
+                const ctl = new AbortController();
+                const timer = setTimeout(() => ctl.abort(), timeoutMs);
+                try {
+                    const res = await fetch(wrap(url), { cache:"no-store", signal:ctl.signal });
+                    if (!res.ok) throw new Error("HTTP " + res.status);
+                    const text = await res.text();
+                    if (!text || text.length < 100) throw new Error("空レスポンス");
+                    return text;
+                } catch (e) {
+                    lastErr = e;
+                } finally {
+                    clearTimeout(timer);
+                }
+            }
+            throw lastErr || new Error("全経路で失敗");
+        }
+
+        function normalize(rows) {
+            const map = new Map();
+            for (const [d, v] of rows) {
+                if (!isFinite(v) || v <= 0) continue;
+                map.set(d.slice(0,7), v);
+            }
+            const keys = [...map.keys()].sort();
+            return {
+                dates:  keys.map(k => k + "-01"),
+                prices: keys.map(k => +map.get(k).toFixed(2))
+            };
+        }
+
+        async function fromStooq() {
+            const csv = await fetchText("https://stooq.com/q/d/l/?s=%5Espx&i=m");
+            const lines = csv.trim().split(/\r?\n/);
+            const head = lines[0].toLowerCase().split(",");
+            const iD = head.indexOf("date"), iC = head.indexOf("close");
+            if (iD < 0 || iC < 0) throw new Error("Stooq 形式不正");
+            const rows = [];
+            for (let i = 1; i < lines.length; i++) {
+                const c = lines[i].split(",");
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(c[iD])) continue;
+                rows.push([c[iD], parseFloat(c[iC])]);
+            }
+            if (rows.length < 100) throw new Error("Stooq データ不足");
+            return { ...normalize(rows), source:"Stooq (^SPX) / ライブ取得", updated:new Date().toISOString() };
+        }
+
+        async function fromYahoo() {
+            const j = JSON.parse(await fetchText(
+                "https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC?range=max&interval=1mo"));
+            const r = j.chart.result[0];
+            const ts = r.timestamp, cl = r.indicators.quote[0].close;
+            const rows = [];
+            for (let i = 0; i < ts.length; i++) {
+                if (cl[i] == null) continue;
+                const dt = new Date(ts[i] * 1000);
+                const key = dt.getUTCFullYear() + "-" + String(dt.getUTCMonth()+1).padStart(2,"0");
+                rows.push([key + "-01", cl[i]]);
+            }
+            if (rows.length < 100) throw new Error("Yahoo データ不足");
+            return { ...normalize(rows), source:"Yahoo Finance (^GSPC) / ライブ取得", updated:new Date().toISOString() };
+        }
+
+        /* ── 画面から呼ばれる入口 ──────────────────────────────── */
+        async function loadLive() {
+            const btn = $("refresh-btn");
+            btn.disabled = true;
+            setStatus("s-loading", "最新値を取得中...");
+            for (const src of [fromStooq, fromYahoo]) {
+                try {
+                    const data = await src();
+                    apply(data);
+                    setStatus("s-ok", `✓ ${ym(data.dates.at(-1))} までの最新値を取得しました`);
+                    btn.disabled = false;
+                    return true;
+                } catch (e) {
+                    console.warn("ライブ取得失敗:", e);
+                }
+            }
+            btn.disabled = false;
+            return false;
+        }
+
+        async function init() {
+            try {
+                const data = await loadRepoData();
+                apply(data);
+                setStatus("s-ok", `✓ ${ym(data.dates.at(-1))} までのデータを表示中`);
+                return;
+            } catch (e) {
+                console.warn("リポジトリのJSONを読めません:", e);
+            }
+
+            setStatus("s-loading", "取得元に直接接続しています...");
+            if (await loadLive()) return;
+
+            setStatus("s-err",
+                "データを取得できませんでした。ローカルで開いている場合は、" +
+                "リポジトリのルートで `python3 -m http.server` を実行してから開いてください。");
+        }
+
+        init();
+    </script>
+</body>
+</html>
