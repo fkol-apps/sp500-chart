@@ -74,7 +74,7 @@ def from_datahub() -> dict:
     if len(rows) < MIN_ROWS:
         raise RuntimeError(f"datahub: 件数が不足しています ({len(rows)}件)")
     dates, prices = normalize(rows)
-    return {"source": "datasets/s-and-p-500 (月次)", "dates": dates, "prices": prices}
+    return {"source": "datasets/s-and-p-500 ／ 月中平均", "dates": dates, "prices": prices}
 
 
 def from_stooq() -> dict:
@@ -94,7 +94,7 @@ def from_stooq() -> dict:
     if len(rows) < MIN_ROWS:
         raise RuntimeError(f"Stooq: 件数が不足しています ({len(rows)}件)")
     dates, prices = normalize(rows)
-    return {"source": "Stooq (^SPX)", "dates": dates, "prices": prices}
+    return {"source": "Stooq (^SPX) ／ 月末終値", "dates": dates, "prices": prices}
 
 
 def from_yahoo() -> dict:
@@ -116,7 +116,7 @@ def from_yahoo() -> dict:
     if len(rows) < MIN_ROWS:
         raise RuntimeError(f"Yahoo: 件数が不足しています ({len(rows)}件)")
     dates, prices = normalize(rows)
-    return {"source": "Yahoo Finance (^GSPC)", "dates": dates, "prices": prices}
+    return {"source": "Yahoo Finance (^GSPC) ／ 月末終値", "dates": dates, "prices": prices}
 
 
 def load_existing() -> dict | None:
@@ -146,8 +146,15 @@ def main() -> int:
         return 1
 
     existing = load_existing()
-    if existing and existing.get("dates") == data["dates"] and existing.get("prices") == data["prices"]:
-        print("価格データに変更はありません。")
+    # source も比較する。取得元ラベルだけ変わったときに
+    # 書き換えを取りこぼさないため
+    if (
+        existing
+        and existing.get("dates") == data["dates"]
+        and existing.get("prices") == data["prices"]
+        and existing.get("source") == data["source"]
+    ):
+        print("データに変更はありません。")
         return 0
 
     # 取得元によって開始年が違う（1871年 / 1928年）ので件数では比較しない。
