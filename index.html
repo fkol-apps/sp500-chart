@@ -81,7 +81,7 @@
 </head>
 <body>
     <h1>S&amp;P 500 全期間チャート</h1>
-    <p class="subtitle">1928年〜現在の歴史的価格推移</p>
+    <p class="subtitle" id="subtitle">月次の歴史的価格推移</p>
 
     <div class="stats">
         <div class="stat-item">
@@ -164,15 +164,29 @@
             $("stat-return").textContent  = (ret >= 0 ? "+" : "") + ret.toFixed(1) + "%";
             $("stat-ath").textContent     = fmt(ath);
             $("stat-range").textContent   = ym(allDates[0]) + " 〜 " + ym(allDates.at(-1));
+
+            // 副題は実データの範囲から組み立てる（取得元が変わっても嘘にならない）
+            const first = allDates[0], last = allDates.at(-1);
+            $("subtitle").textContent =
+                `${+first.slice(0,4)}年〜${+last.slice(0,4)}年${+last.slice(5,7)}月の月次推移`;
+        }
+
+        // 最新月が「今月」のときだけ、その月はまだ確定していない
+        function lastMonthIsCurrent() {
+            if (!allDates.length) return false;
+            const now = new Date();
+            const key = now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, "0");
+            return allDates.at(-1).slice(0, 7) === key;
         }
 
         function updateNote() {
             const stamp = updatedAt
                 ? new Date(updatedAt).toLocaleString("ja-JP", {dateStyle:"medium", timeStyle:"short"})
                 : "—";
+            // 値が月末終値か月中平均かは取得元によって違うので、ラベル側に持たせている
             $("note").textContent =
-                `データ出典: ${sourceLabel} ／ 月次終値　　最終更新: ${stamp}` +
-                `　　※当月分は月末までの暫定値です`;
+                `データ出典: ${sourceLabel}　　最終更新: ${stamp}` +
+                (lastMonthIsCurrent() ? "　　※当月分は月末までの暫定値です" : "");
         }
 
         // 最終データ年の1月を境に色分けする（毎年自動で切り替わる）
@@ -344,7 +358,7 @@
                 rows.push([c[iD], parseFloat(c[iC])]);
             }
             if (rows.length < 100) throw new Error("Stooq データ不足");
-            return { ...normalize(rows), source:"Stooq (^SPX) / ライブ取得", updated:new Date().toISOString() };
+            return { ...normalize(rows), source:"Stooq (^SPX) ／ 月末終値 ／ ライブ取得", updated:new Date().toISOString() };
         }
 
         async function fromYahoo() {
@@ -360,7 +374,7 @@
                 rows.push([key + "-01", cl[i]]);
             }
             if (rows.length < 100) throw new Error("Yahoo データ不足");
-            return { ...normalize(rows), source:"Yahoo Finance (^GSPC) / ライブ取得", updated:new Date().toISOString() };
+            return { ...normalize(rows), source:"Yahoo Finance (^GSPC) ／ 月末終値 ／ ライブ取得", updated:new Date().toISOString() };
         }
 
         /* ── 画面から呼ばれる入口 ──────────────────────────────── */
