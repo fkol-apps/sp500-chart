@@ -1,9 +1,18 @@
 #!/usr/bin/env python3
-"""S&P 500 の月次終値を取得して data/sp500-monthly.json を更新する。
+"""S&P 500 の月次データを取得して data/sp500-monthly.json を更新する。
 
 サーバー側（GitHub Actions）で実行するのでCORSの制約を受けない。
-Stooq → Yahoo Finance の順に試し、どちらも失敗したら終了コード1で止まる
+取得元を上から順に試し、すべて失敗したら終了コード1で止まる
 （既存のJSONは壊さない）。
+
+取得元の順番には理由がある:
+  1. datasets/s-and-p-500 (raw.githubusercontent.com)
+     GitHub 上のCSVなので Actions のランナーから確実に到達できる。
+     1871年からの月次データ。値は月中平均なので月末終値とは僅かに異なる。
+  2. Stooq / 3. Yahoo
+     月末終値そのものが取れるが、どちらもデータセンターIPからの
+     アクセスを 403 で拒否することがあり、Actions 上では失敗しやすい。
+     ローカル実行時のために残してある。
 
 依存: 標準ライブラリのみ
 """
@@ -26,6 +35,10 @@ UA = "Mozilla/5.0 (compatible; sp500-chart/1.0; +https://github.com/)"
 # 実データとして受け入れる最低件数。これを下回るレスポンスは異常とみなす
 MIN_ROWS = 300
 
+DATAHUB_URL = (
+    "https://raw.githubusercontent.com/datasets/s-and-p-500/main/data/data.csv"
+)
+
 
 def http_get(url: str) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*"})
@@ -34,7 +47,7 @@ def http_get(url: str) -> bytes:
 
 
 def normalize(rows: list[tuple[str, float]]) -> tuple[list[str], list[float]]:
-    """(YYYY-MM-DD, 終値) のリストを月単位に畳んで昇順に整える。"""
+    """(YYYY-MM-DD, 価格) のリストを月単位に畳んで昇順に整える。"""
     by_month: dict[str, float] = {}
     for date_str, close in rows:
         if close is None or close <= 0:
@@ -44,8 +57,28 @@ def normalize(rows: list[tuple[str, float]]) -> tuple[list[str], list[float]]:
     return [k + "-01" for k in keys], [round(by_month[k], 2) for k in keys]
 
 
+def from_datahub() -> dict:
+    """GitHub 上の公開データセット。Actions から確実に到達できる。"""
+    raw = http_get(DATAHUB_URL).decode("utf-8", "replace")
+    reader = csv.DictReader(io.StringIO(raw))
+    rows: list[tuple[str, float]] = []
+    for rec in reader:
+        date_str = (rec.get("Date") or "").strip()
+        value_str = (rec.get("SP500") or "").strip()
+        if len(date_str) != 10 or not value_str:
+            continue
+        try:
+            rows.append((date_str, float(value_str)))
+        except ValueError:
+            continue
+    if len(rows) < MIN_ROWS:
+        raise RuntimeError(f"datahub: 件数が不足しています ({len(rows)}件)")
+    dates, prices = normalize(rows)
+    return {"source": "datasets/s-and-p-500 (月次)", "dates": dates, "prices": prices}
+
+
 def from_stooq() -> dict:
-    """Stooq の月足CSV。1789年以降の長期データを持つ。"""
+    """Stooq の月足CSV。月末終値が取れるがCI環境では拒否されやすい。"""
     raw = http_get("https://stooq.com/q/d/l/?s=%5Espx&i=m").decode("utf-8", "replace")
     reader = csv.DictReader(io.StringIO(raw))
     rows: list[tuple[str, float]] = []
@@ -97,7 +130,7 @@ def main() -> int:
     errors: list[str] = []
     data: dict | None = None
 
-    for fetch in (from_stooq, from_yahoo):
+    for fetch in (from_datahub, from_stooq, from_yahoo):
         try:
             data = fetch()
             print(f"取得成功: {data['source']} / {len(data['dates'])}件")
@@ -117,11 +150,13 @@ def main() -> int:
         print("価格データに変更はありません。")
         return 0
 
-    if existing and len(existing.get("dates", [])) > len(data["dates"]) + 12:
-        # 既存より大幅に短いデータは異常。取り違えを防ぐため書き込まない
+    # 取得元によって開始年が違う（1871年 / 1928年）ので件数では比較しない。
+    # 「最新月が既存より過去に戻る」ことだけを異常とみなす。
+    old_dates = (existing or {}).get("dates") or []
+    if old_dates and data["dates"][-1] < old_dates[-1]:
         print(
-            f"新データが既存より大幅に短いため中止しました "
-            f"({len(data['dates'])}件 < {len(existing['dates'])}件)",
+            f"新データの最終月が既存より過去のため中止しました "
+            f"({data['dates'][-1]} < {old_dates[-1]})",
             file=sys.stderr,
         )
         return 1
